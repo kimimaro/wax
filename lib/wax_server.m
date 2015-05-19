@@ -41,7 +41,8 @@ static void TCPServerAcceptCallBack(CFSocketRef socket, CFSocketCallBackType typ
     _ipv4socket = CFSocketCreate(kCFAllocatorDefault, PF_INET, SOCK_STREAM, IPPROTO_TCP, kCFSocketAcceptCallBack, (CFSocketCallBack)&TCPServerAcceptCallBack, &socketCtxt);
 
     if (_ipv4socket == NULL) {
-        error = [[NSError alloc] initWithDomain:@"Wax Error" code:kTCPServerNoSocketsAvailable userInfo:nil];
+        error = [[[NSError alloc] initWithDomain:@"Wax Error" code:kTCPServerNoSocketsAvailable userInfo:nil] autorelease];
+        NSLog(@"%@", error);
         _ipv4socket = NULL;
         return NO;
     }	
@@ -60,7 +61,8 @@ static void TCPServerAcceptCallBack(CFSocketRef socket, CFSocketCallBackType typ
     NSData *address4 = [NSData dataWithBytes:&addr4 length:sizeof(addr4)];
 	
     if (kCFSocketSuccess != CFSocketSetAddress(_ipv4socket, (CFDataRef)address4)) {
-        error = [[NSError alloc] initWithDomain:@"Wax Error" code:kTCPServerCouldNotBindToIPv4Address userInfo:nil];
+        error = [[[NSError alloc] initWithDomain:@"Wax Error" code:kTCPServerCouldNotBindToIPv4Address userInfo:nil] autorelease];
+        NSLog(@"%@", error);
         if (_ipv4socket) CFRelease(_ipv4socket);
         _ipv4socket = NULL;
         return NO;
@@ -188,7 +190,7 @@ static void TCPServerAcceptCallBack(CFSocketRef socket, CFSocketCallBackType typ
 }
 
 - (NSString*)description {
-	return [NSString stringWithFormat:@"<%@ = 0x%08X | port %d | netService = %@>", [self class], (long)self, [_netService port] , _netService];
+	return [NSString stringWithFormat:@"<%@ = 0x%08lX | port %d | netService = %@>", [self class], (long)self, [_netService port] , _netService];
 }
 
 // Stream Delegate
@@ -214,6 +216,8 @@ static void TCPServerAcceptCallBack(CFSocketRef socket, CFSocketCallBackType typ
 		case NSStreamEventErrorOccurred:
 			NSLog(@"Error: Stream error encountered!");
 			break;
+        default:
+            break;
 	}	
 }
 

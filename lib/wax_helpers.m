@@ -102,12 +102,120 @@ int wax_getStackTrace(lua_State *L) {
     return 1;
 }
 
+// 64位进程传参
+int wax_fromObjcEx(lua_State *L, const char *typeDesc, va_list argsList)
+{
+    BEGIN_STACK_MODIFY(L)
+    
+    const char *typeDescription = wax_removeProtocolEncodings(typeDesc);
+    
+    switch (typeDescription[0]) {
+        case WAX_TYPE_VOID:
+            lua_pushnil(L);
+            break;
+            
+        case WAX_TYPE_POINTER:
+            lua_pushlightuserdata(L, va_arg(argsList, void *));
+            break;
+            
+        case WAX_TYPE_CHAR: {
+            char c = va_arg(argsList, int);
+            if (c <= 1) lua_pushboolean(L, c); // If it's 1 or 0, then treat it like a bool
+            else lua_pushinteger(L, c);
+            break;
+        }
+            
+        case WAX_TYPE_SHORT:
+            lua_pushinteger(L, va_arg(argsList, int));
+            break;
+            
+        case WAX_TYPE_INT:
+            lua_pushnumber(L, va_arg(argsList, int));
+            break;
+            
+        case WAX_TYPE_UNSIGNED_CHAR:
+            lua_pushnumber(L, va_arg(argsList, int));
+            break;
+            
+        case WAX_TYPE_UNSIGNED_INT:
+            lua_pushnumber(L, va_arg(argsList, unsigned int));
+            break;
+            
+        case WAX_TYPE_UNSIGNED_SHORT:
+            lua_pushinteger(L, va_arg(argsList, int));
+            break;
+            
+        case WAX_TYPE_LONG:  // 64位平台下,long和long long都是8个字节
+        case WAX_TYPE_LONG_LONG:
+            lua_pushnumber(L, va_arg(argsList, long));
+            break;
+            
+        case WAX_TYPE_UNSIGNED_LONG:
+            lua_pushnumber(L, va_arg(argsList, unsigned long));
+            break;
+            
+        case WAX_TYPE_UNSIGNED_LONG_LONG:
+            lua_pushnumber(L, va_arg(argsList, unsigned long long));
+            break;
+            
+        case WAX_TYPE_FLOAT:
+            // 按照C语言的参数传递规则, va_arg的type参数是不能指定为float, 因此对于函数原型未指明类型的参数在
+            // 传递过程中会被提升, 例如char会被提升为int, float会被提升为double。
+            // 但这里如果使用double会无法取到正确的值。
+            lua_pushnumber(L, va_arg(argsList, double));
+            break;
+            
+        case WAX_TYPE_DOUBLE:
+            lua_pushnumber(L, va_arg(argsList, double));
+            break;
+            
+        case WAX_TYPE_C99_BOOL:
+            lua_pushboolean(L, va_arg(argsList, int));
+            break;
+            
+        case WAX_TYPE_STRING:
+            lua_pushstring(L, va_arg(argsList, char *));
+            break;
+            
+        case WAX_TYPE_ID: {
+            id instance = va_arg(argsList, id);
+            wax_fromInstance(L, instance);
+            break;
+        }
+            
+        case WAX_TYPE_STRUCT: {
+            //wax_fromStruct(L, typeDescription, buffer);
+            break;
+        }
+            
+        case WAX_TYPE_SELECTOR:
+            //lua_pushstring(L, sel_getName(*(SEL *)buffer));
+            lua_pushstring(L, sel_getName(va_arg(argsList, SEL)));
+            break;
+            
+        case WAX_TYPE_CLASS: {
+            //id instance = *(id *)buffer;
+            id instance = va_arg(argsList, id);
+            wax_instance_create(L, instance, YES);
+            break;
+        }
+            
+        default:
+            luaL_error(L, "Unable to convert Obj-C type with type description '%s'", typeDescription);
+            break;
+    }
+    
+    END_STACK_MODIFY(L, 1)
+    
+    return 0;
+}
+
 int wax_fromObjc(lua_State *L, const char *typeDescription, void *buffer) {
     BEGIN_STACK_MODIFY(L)
     
     typeDescription = wax_removeProtocolEncodings(typeDescription);
     
-    int size = wax_sizeOfTypeDescription(typeDescription);
+    int size = wax_sizeOfTypeDescForVaPms(typeDescription);
     
     switch (typeDescription[0]) {
         case WAX_TYPE_VOID:
@@ -119,14 +227,14 @@ int wax_fromObjc(lua_State *L, const char *typeDescription, void *buffer) {
             break;                        
             
         case WAX_TYPE_CHAR: {
-            char c = *(char *)buffer;
+            int c = *(int *)buffer;
             if (c <= 1) lua_pushboolean(L, c); // If it's 1 or 0, then treat it like a bool
             else lua_pushinteger(L, c);
             break;
         }
             
         case WAX_TYPE_SHORT:
-            lua_pushinteger(L, *(short *)buffer);            
+            lua_pushinteger(L, *(int *)buffer);
             break;
             
         case WAX_TYPE_INT:
@@ -134,7 +242,7 @@ int wax_fromObjc(lua_State *L, const char *typeDescription, void *buffer) {
             break;
 
         case WAX_TYPE_UNSIGNED_CHAR:
-            lua_pushnumber(L, *(unsigned char *)buffer);
+            lua_pushnumber(L, *(int *)buffer);
             break;
 
         case WAX_TYPE_UNSIGNED_INT:
@@ -142,7 +250,7 @@ int wax_fromObjc(lua_State *L, const char *typeDescription, void *buffer) {
             break;
 
         case WAX_TYPE_UNSIGNED_SHORT:
-            lua_pushinteger(L, *(short *)buffer);
+            lua_pushinteger(L, *(int *)buffer);
             break;
             
         case WAX_TYPE_LONG:
@@ -208,6 +316,142 @@ int wax_fromObjc(lua_State *L, const char *typeDescription, void *buffer) {
     return size;
 }
 
+int bba_wax_fromObjc(lua_State *L, NSString *typeDesc, NSArray *args, int pindex)
+{
+    if (typeDesc == nil) return 0;
+    
+    if ([args count] <= pindex) return -1;
+    
+    
+    BEGIN_STACK_MODIFY(L)
+    
+    if ([typeDesc isEqualToString:METHOD_PARAMTYPE_DESC_ID])
+    {
+        id instance = [args objectAtIndex:pindex];
+        if ([instance isKindOfClass:[NSNull class]])
+        {
+            wax_fromInstance(L, nil);
+        }
+        else
+        {
+            wax_fromInstance(L, instance);
+        }
+    }
+    else if ([typeDesc isEqualToString:METHOD_PARAMTYPE_DESC_INT])
+    {
+        NSNumber *instance = [args objectAtIndex:pindex];
+        if ([instance isKindOfClass:[instance class]])
+        {
+            lua_pushnumber(L, [instance integerValue]);
+        }
+        else
+        {
+            lua_pushnumber(L, 0);
+        }
+    }
+    else
+    {
+        luaL_error(L, "Unable to convert Obj-C type with type description '%s'", [typeDesc cStringUsingEncoding:NSUTF8StringEncoding]);
+    }
+    
+    
+//    switch (typeDescription[0]) {
+//        case WAX_TYPE_VOID:
+//            lua_pushnil(L);
+//            break;
+//        case WAX_TYPE_CLASS:
+//        case WAX_TYPE_ID: {
+//            id instance = [args objectAtIndex:pindex];
+//            if ([instance isKindOfClass:[NSNull class]])
+//            {
+//                wax_fromInstance(L, nil);
+//            }
+//            else
+//            {
+//                wax_fromInstance(L, instance);
+//            }
+//            break;
+//        }
+//        case WAX_TYPE_SELECTOR:
+//            lua_pushstring(L, sel_getName(*(SEL *)buffer));
+//            break;
+//        case WAX_TYPE_STRUCT: {
+//            wax_fromStruct(L, typeDescription, buffer);
+//            break;
+//        }
+//        case WAX_TYPE_POINTER:
+//            lua_pushlightuserdata(L, *(void **)buffer);
+//            break;
+//            
+//        case WAX_TYPE_CHAR: {
+//            int c = *(int *)buffer;
+//            if (c <= 1) lua_pushboolean(L, c); // If it's 1 or 0, then treat it like a bool
+//            else lua_pushinteger(L, c);
+//            break;
+//        }
+//            
+//        case WAX_TYPE_SHORT:
+//            lua_pushinteger(L, *(int *)buffer);
+//            break;
+//            
+//        case WAX_TYPE_INT:
+//            lua_pushnumber(L, *(int *)buffer);
+//            break;
+//            
+//        case WAX_TYPE_UNSIGNED_CHAR:
+//            lua_pushnumber(L, *(int *)buffer);
+//            break;
+//            
+//        case WAX_TYPE_UNSIGNED_INT:
+//            lua_pushnumber(L, *(unsigned int *)buffer);
+//            break;
+//            
+//        case WAX_TYPE_UNSIGNED_SHORT:
+//            lua_pushinteger(L, *(int *)buffer);
+//            break;
+//            
+//        case WAX_TYPE_LONG:
+//            lua_pushnumber(L, *(long *)buffer);
+//            break;
+//            
+//        case WAX_TYPE_LONG_LONG:
+//            lua_pushnumber(L, *(long long *)buffer);
+//            break;
+//            
+//        case WAX_TYPE_UNSIGNED_LONG:
+//            lua_pushnumber(L, *(unsigned long *)buffer);
+//            break;
+//            
+//        case WAX_TYPE_UNSIGNED_LONG_LONG:
+//            lua_pushnumber(L, *(unsigned long long *)buffer);
+//            break;
+//            
+//        case WAX_TYPE_FLOAT:
+//            lua_pushnumber(L, *(float *)buffer);
+//            break;
+//            
+//        case WAX_TYPE_DOUBLE:
+//            lua_pushnumber(L, *(double *)buffer);
+//            break;
+//            
+//        case WAX_TYPE_C99_BOOL:
+//            lua_pushboolean(L, *(BOOL *)buffer);
+//            break;
+//            
+//        case WAX_TYPE_STRING:
+//            lua_pushstring(L, *(char **)buffer);
+//            break;
+//            
+//        default:
+//            luaL_error(L, "Unable to convert Obj-C type with type description '%s'", typeDescription);
+//            break;
+//    }
+    
+    END_STACK_MODIFY(L, 1)
+    
+    return 0;
+}
+
 void wax_fromStruct(lua_State *L, const char *typeDescription, void *buffer) {
     wax_struct_create(L, typeDescription, buffer);
 }
@@ -225,7 +469,7 @@ void wax_fromInstance(lua_State *L, id instance) {
         else if ([instance isKindOfClass:[NSArray class]]) {
             lua_newtable(L);
             for (id obj in instance) {
-                int i = lua_objlen(L, -1);
+                int i = (int)lua_objlen(L, -1);
                 wax_fromInstance(L, obj);
                 lua_rawseti(L, -2, i + 1);
             }
@@ -366,7 +610,7 @@ void *wax_copyToObjc(lua_State *L, const char *typeDescription, int stackIndex, 
             
         case WAX_TYPE_STRING: {
             const char *string = lua_tostring(L, stackIndex);
-            int length = strlen(string) + 1;
+            int length = (int)strlen(string) + 1;
             *outsize = length;
             
             value = calloc(sizeof(char *), length);
@@ -533,7 +777,7 @@ void *wax_copyToObjc(lua_State *L, const char *typeDescription, int stackIndex, 
             else {
                 void *data = (void *)lua_tostring(L, stackIndex);            
                 size_t length = lua_objlen(L, stackIndex);
-                *outsize = length;
+                *outsize = (int)length;
             
                 value = malloc(length);
                 memcpy(value, data, length);
@@ -550,12 +794,52 @@ void *wax_copyToObjc(lua_State *L, const char *typeDescription, int stackIndex, 
 }
 
 // You can't tell if there are 0 or 1 arguments based on selector alone, so pass in an SEL[2] for possibleSelectors
-void wax_selectorsForName(const char *methodName, SEL possibleSelectors[2]) {
-    int strlength = strlen(methodName) + 2; // Add 2. One for trailing : and one for \0
+NSString * wax_selectorsForName(const char *methodName, SEL possibleSelectors[2]) {
+    
+    if (!methodName) return nil;
+    
+    NSString *methodNameStr = [NSString stringWithCString:methodName encoding:NSUTF8StringEncoding];
+    NSArray *methodSegments = [methodNameStr componentsSeparatedByString:@"_"];
+    NSMutableString *paramtype = [NSMutableString string];
+    for (NSString *seg in methodSegments)
+    {
+        if ([seg hasSuffix:METHOD_PARAMTYPE_DESC_INT] || [seg hasSuffix:METHOD_PARAMTYPE_DESC_BOOL])
+        {
+            [paramtype appendString:INT_FLAG];
+        }
+        else if ([seg hasSuffix:METHOD_PARAMTYPE_DESC_FLOAT])
+        {
+            [paramtype appendString:FLOAT_FLAG];
+        }
+        else if ([seg hasSuffix:METHOD_PARAMTYPE_DESC_ID])
+        {
+            [paramtype appendString:ID_FLAG];
+        }
+        else if ([seg hasSuffix:METHOD_PARAMTYPE_DESC_VOID])
+        {
+            [paramtype appendString:VOID_FLAG];
+        }
+        else
+        {
+            [paramtype appendString:VOID_FLAG];
+        }
+    }
+    
+    // 替换为真实函数名称
+    methodNameStr = [methodNameStr stringByReplacingOccurrencesOfString:METHOD_PARAMTYPE_DESC_VOID withString:@""];
+    methodNameStr = [methodNameStr stringByReplacingOccurrencesOfString:METHOD_PARAMTYPE_DESC_ID withString:@""];
+    methodNameStr = [methodNameStr stringByReplacingOccurrencesOfString:METHOD_PARAMTYPE_DESC_INT withString:@""];
+    methodNameStr = [methodNameStr stringByReplacingOccurrencesOfString:METHOD_PARAMTYPE_DESC_FLOAT withString:@""];
+    methodNameStr = [methodNameStr stringByReplacingOccurrencesOfString:METHOD_PARAMTYPE_DESC_BOOL withString:@""];
+
+    
+    const char *clearMName = [methodNameStr cStringUsingEncoding:NSUTF8StringEncoding];
+    
+    size_t strlength = strlen(clearMName) + 2; // Add 2. One for trailing : and one for \0
     char *objcMethodName = calloc(strlength, 1); 
     
     int argCount = 0;
-    strcpy(objcMethodName, methodName);
+    strcpy(objcMethodName, clearMName);
     for(int i = 0; objcMethodName[i]; i++) {
         if (objcMethodName[i] == '_') {
             argCount++;
@@ -566,21 +850,29 @@ void wax_selectorsForName(const char *methodName, SEL possibleSelectors[2]) {
     objcMethodName[strlength - 2] = ':'; // Add final arg portion
     possibleSelectors[0] = sel_getUid(objcMethodName);
     
-    if (argCount == 0) {
+    if (argCount == 0)
+    {
         objcMethodName[strlength - 2] = '\0';
         possibleSelectors[1] = sel_getUid(objcMethodName);        
     }
-    else {
+    else
+    {
         possibleSelectors[1] = nil;
     }
-
-
     free(objcMethodName);
+    
+    return paramtype;
 }
 
-BOOL wax_selectorForInstance(wax_instance_userdata *instanceUserdata, SEL* foundSelectors, const char *methodName, BOOL forceInstanceCheck) {    
+BOOL wax_selectorForInstance(wax_instance_userdata *instanceUserdata, SEL* foundSelectors, const char *methodName, BOOL forceInstanceCheck, NSString **paramType) {
     SEL possibleSelectors[2];
-    wax_selectorsForName(methodName, possibleSelectors);
+    NSString *tmpType = wax_selectorsForName(methodName, possibleSelectors);
+    if (paramType)
+    {
+        *paramType = tmpType;
+    }
+    
+    if (tmpType == nil) return NO;
     
     for (int i = 0; i < 2; i++) {
         SEL selector = possibleSelectors[i];
@@ -604,18 +896,49 @@ BOOL wax_selectorForInstance(wax_instance_userdata *instanceUserdata, SEL* found
     return foundSelectors[0] || foundSelectors[1];
 }
 
-void wax_pushMethodNameFromSelector(lua_State *L, SEL selector) {
+void wax_pushMethodNameFromSelector(lua_State *L, SEL selector, NSArray *exTypes) {
     BEGIN_STACK_MODIFY(L)
     const char *methodName = [NSStringFromSelector(selector) UTF8String];
-    int length = strlen(methodName);
+    size_t length = strlen(methodName);
     
     luaL_Buffer b;
     luaL_buffinit(L, &b);    
     
     int i = 0;
+    int argIndex = -1;
+    NSString *exType = nil;
     while(methodName[i]) {
         if (methodName[i] == ':') {
-            if (i < length - 1) luaL_addchar(&b, '_');
+            argIndex++;
+            if (exTypes.count > argIndex)
+            {
+                exType = [exTypes objectAtIndex:argIndex];
+            }
+            if (i < length - 1)
+            {
+                if (exType != nil)
+                {
+                    const char *cexType = [exType cStringUsingEncoding:NSUTF8StringEncoding];
+                    while (*cexType)
+                    {
+                        luaL_addchar(&b, *cexType);
+                        cexType++;
+                    }
+                }
+                luaL_addchar(&b, '_');
+            }
+            else if(i == length - 1)
+            {
+                if (exType != nil)
+                {
+                    const char *cexType = [exType cStringUsingEncoding:NSUTF8StringEncoding];
+                    while (*cexType)
+                    {
+                        luaL_addchar(&b, *cexType);
+                        cexType++;
+                    }
+                }
+            }
         }
         else {
             luaL_addchar(&b, methodName[i]);
@@ -653,6 +976,127 @@ const char *wax_removeProtocolEncodings(const char *type_descriptions) {
             return type_descriptions;
             break;
     }
+}
+
+int wax_sizeOfTypeDescForVaPms(const char *full_type_description)
+{
+    int index = 0;
+    int size = 0;
+    
+    size_t length = strlen(full_type_description) + 1;
+    char *type_description = alloca(length);
+    bzero(type_description, length);
+    wax_simplifyTypeDescription(full_type_description, type_description);
+    
+    while(type_description[index]) {
+        switch (type_description[index]) {
+            case WAX_TYPE_POINTER:
+                size += sizeof(void *);
+                
+            case WAX_TYPE_CHAR:
+                size += sizeof(int);
+                break;
+                
+            case WAX_TYPE_INT:
+                size += sizeof(int);
+                break;
+                
+            case WAX_TYPE_ARRAY:
+            case WAX_TYPE_ARRAY_END:
+                [NSException raise:@"Wax Error" format:@"C array's are not implemented yet."];
+                break;
+                
+            case WAX_TYPE_SHORT:
+                size += sizeof(int);
+                break;
+                
+            case WAX_TYPE_UNSIGNED_CHAR:
+                size += sizeof(int);
+                break;
+                
+            case WAX_TYPE_UNSIGNED_INT:
+                size += sizeof(unsigned int);
+                break;
+                
+            case WAX_TYPE_UNSIGNED_SHORT:
+                size += sizeof(unsigned int);
+                break;
+                
+            case WAX_TYPE_LONG:
+                size += sizeof(long);
+                break;
+                
+            case WAX_TYPE_LONG_LONG:
+                size += sizeof(long long);
+                break;
+                
+            case WAX_TYPE_UNSIGNED_LONG:
+                size += sizeof(unsigned long);
+                break;
+                
+            case WAX_TYPE_UNSIGNED_LONG_LONG:
+                size += sizeof(unsigned long long);
+                break;
+                
+            case WAX_TYPE_FLOAT:
+                size += sizeof(float);
+                break;
+                
+            case WAX_TYPE_DOUBLE:
+                size += sizeof(double);
+                break;
+                
+            case WAX_TYPE_C99_BOOL:
+                size += sizeof(int);
+                break;
+                
+            case WAX_TYPE_STRING:
+                size += sizeof(char *);
+                break;
+                
+            case WAX_TYPE_VOID:
+                size += sizeof(char);
+                break;
+                
+            case WAX_TYPE_BITFIELD:
+                [NSException raise:@"Wax Error" format:@"Bitfields are not implemented yet"];
+                break;
+                
+            case WAX_TYPE_ID:
+                size += sizeof(id);
+                break;
+                
+            case WAX_TYPE_CLASS:
+                size += sizeof(Class);
+                break;
+                
+            case WAX_TYPE_SELECTOR:
+                size += sizeof(SEL);
+                break;
+                
+            case WAX_TYPE_STRUCT:
+            case WAX_TYPE_STRUCT_END:
+            case WAX_TYPE_UNION:
+            case WAX_TYPE_UNION_END:
+            case WAX_TYPE_UNKNOWN:
+            case WAX_PROTOCOL_TYPE_CONST:
+            case WAX_PROTOCOL_TYPE_IN:
+            case WAX_PROTOCOL_TYPE_INOUT:
+            case WAX_PROTOCOL_TYPE_OUT:
+            case WAX_PROTOCOL_TYPE_BYCOPY:
+            case WAX_PROTOCOL_TYPE_BYREF:
+            case WAX_PROTOCOL_TYPE_ONEWAY:
+                // Weeeee! Just ignore this stuff I guess?
+                break;
+            default:
+                [NSException raise:@"Wax Error" format:@"Unknown type encoding %c", type_description[index]];
+                break;
+        }
+        
+        index++;
+    }
+    
+    return size;
 }
 
 int wax_sizeOfTypeDescription(const char *full_type_description) {

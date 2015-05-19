@@ -11,8 +11,20 @@
 #import <objc/message.h>
 
 #import "wax_instance.h"
-
 #import "lua.h"
+
+// 目前支持传递的参数类型, lua脚本中出现的OC函数名称必需指定每个参数的类型，否则会导致调用失败
+// 如需传递CGRect，CGPoint等结构体，请参考CGRectObj等类进行转换
+#define METHOD_PARAMTYPE_DESC_VOID          @"VOID"  // 代表函数无参数
+#define VOID_FLAG     @"0"
+#define METHOD_PARAMTYPE_DESC_ID            @"IID"   // 参数类型为id,之所以使用IID是为了防止与类似(xxxxPluginID:xx)函数名发生冲突
+#define ID_FLAG       @"1"
+#define METHOD_PARAMTYPE_DESC_INT           @"INT"   // 代表整形，在传递给Lua时会自动提升为long
+#define INT_FLAG      @"2"
+#define METHOD_PARAMTYPE_DESC_FLOAT         @"FLOAT" // 代表浮点型，在传递给Lua时会自动提升为double
+#define FLOAT_FLAG    @"3"
+#define METHOD_PARAMTYPE_DESC_BOOL          @"BOOL"  // 与INT相同
+#define BOOL_FLAG     @"4"
 
 //#define _C_ATOM     '%'
 //#define _C_VECTOR   '!'
@@ -81,20 +93,24 @@ void wax_log(int flag, NSString *format, ...);
 int wax_getStackTrace(lua_State *L);
 
 // Convertion Helpers
+int wax_fromObjcEx(lua_State *L, const char *typeDescription, va_list argsList);
 int wax_fromObjc(lua_State *L, const char *typeDescription, void *buffer);
+int bba_wax_fromObjc(lua_State *L, NSString *typeDesc, NSArray *args, int pindex);
+
 void wax_fromInstance(lua_State *L, id instance);
 void wax_fromStruct(lua_State *L, const char *typeDescription, void *buffer);
     
 void *wax_copyToObjc(lua_State *L, const char *typeDescription, int stackIndex, int *outsize);
 
 // Misc Helpers
-void wax_selectorsForName(const char *methodName, SEL selectors[2]);
-BOOL wax_selectorForInstance(wax_instance_userdata *instanceUserdata, SEL* foundSelectors, const char *methodName, BOOL forceInstanceCheck);
-void wax_pushMethodNameFromSelector(lua_State *L, SEL selector);
+NSString * wax_selectorsForName(const char *methodName, SEL possibleSelectors[2]);
+BOOL wax_selectorForInstance(wax_instance_userdata *instanceUserdata, SEL* foundSelectors, const char *methodName, BOOL forceInstanceCheck, NSString **paramType);
+void wax_pushMethodNameFromSelector(lua_State *L, SEL selector, NSArray *exTypes);
 BOOL wax_isInitMethod(const char *methodName);
 
 const char *wax_removeProtocolEncodings(const char *type_descriptions);
 
+int wax_sizeOfTypeDescForVaPms(const char *full_type_description);
 int wax_sizeOfTypeDescription(const char *full_type_description);
 int wax_simplifyTypeDescription(const char *in, char *out);
 

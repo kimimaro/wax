@@ -15,7 +15,7 @@
 #import "wax_instance.h"
 #import "wax_helpers.h"
 
-#define WAX_GC_TIMEOUT 1
+#define WAX_GC_TIMEOUT 5.0f     // 垃圾回收的触发间隔为5.0s
 
 @implementation wax_gc
 
@@ -23,7 +23,7 @@ static NSTimer* timer = nil;
 
 + (void)start {
     [timer invalidate];
-    timer = [NSTimer scheduledTimerWithTimeInterval:WAX_GC_TIMEOUT target:self selector:@selector(cleanupUnusedObject) userInfo:nil repeats:YES];
+    timer = [[NSTimer scheduledTimerWithTimeInterval:WAX_GC_TIMEOUT target:self selector:@selector(cleanupUnusedObject) userInfo:nil repeats:YES] retain];
 }
 
 + (void)stop {
@@ -31,11 +31,13 @@ static NSTimer* timer = nil;
     timer = nil;
 }
 
-+ (void)cleanupUnusedObject {   
++ (void)cleanupUnusedObject {
     lua_State *L = wax_currentLuaState();
     BEGIN_STACK_MODIFY(L)
     
     wax_instance_pushStrongUserdataTable(L);
+    
+    beginLuaExec();
 
     lua_pushnil(L);  // first key
     while (lua_next(L, -2)) {
@@ -43,13 +45,18 @@ static NSTimer* timer = nil;
         lua_pop(L, 1); // pops the value, keeps the key
             
         if (!instanceUserdata->isClass && !instanceUserdata->isSuper && [instanceUserdata->instance retainCount] <= 1) {
+            NSLog(@"wax gc gonna release:%@", instanceUserdata->instance);
             lua_pushvalue(L, -1);
             lua_pushnil(L);
             lua_rawset(L, -4); // Clear it!
+            if(instanceUserdata->waxRetain) {
+                NSLog(@"wax gc release:%@", instanceUserdata->instance);
+                [instanceUserdata->instance release];
+                instanceUserdata->waxRetain = NO; // fix gc bad exec
+            }
         }        
     }
-
-        
+    endLuaExec();
     END_STACK_MODIFY(L, 0);
 }
 
